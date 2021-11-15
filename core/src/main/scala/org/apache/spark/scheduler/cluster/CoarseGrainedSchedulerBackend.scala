@@ -25,6 +25,7 @@ import scala.collection.mutable.{HashMap, HashSet}
 import scala.concurrent.Future
 
 import org.apache.hadoop.security.UserGroupInformation
+import org.ishugaliy.allgood.consistent.hash.node.SimpleNode
 
 import org.apache.spark.{ExecutorAllocationClient, SparkEnv, SparkException, TaskState}
 import org.apache.spark.deploy.SparkHadoopUtil
@@ -55,7 +56,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
   // Use an atomic variable to track total number of cores in the cluster for simplicity and speed
   protected val totalCoreCount = new AtomicInteger(0)
   // Total number of executors that are currently registered
-  protected val totalRegisteredExecutors = new AtomicInteger(0)
+  protected val totalRegisteredExecutors: AtomicInteger = new AtomicInteger(0)
   protected val conf = scheduler.sc.conf
   private val maxRpcMessageSize = RpcUtils.maxMessageSizeBytes(conf)
   private val defaultAskTimeout = RpcUtils.askRpcTimeout(conf)
@@ -263,6 +264,8 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           // in this block are read when requesting executors
           CoarseGrainedSchedulerBackend.this.synchronized {
             executorDataMap.put(executorId, data)
+            // Refer to TaskLocation.scala for the format
+            executorHashRing.add(SimpleNode.of("executor_%s_%s".format(hostname, executorId)))
             if (currentExecutorIdCounter < executorId.toInt) {
               currentExecutorIdCounter = executorId.toInt
             }
@@ -414,6 +417,7 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
           val lossReason = CoarseGrainedSchedulerBackend.this.synchronized {
             addressToExecutorId -= executorInfo.executorAddress
             executorDataMap -= executorId
+            executorHashRing.remove(SimpleNode.of(executorId))
             executorsPendingLossReason -= executorId
             val killedByDriver = executorsPendingToRemove.remove(executorId).getOrElse(false)
             val workerHostOpt = executorsPendingDecommission.remove(executorId)

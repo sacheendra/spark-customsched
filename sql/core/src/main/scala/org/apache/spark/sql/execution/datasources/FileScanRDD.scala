@@ -200,6 +200,13 @@ class FileScanRDD(
   override protected def getPartitions: Array[RDDPartition] = filePartitions.toArray
 
   override protected def getPreferredLocations(split: RDDPartition): Seq[String] = {
-    split.asInstanceOf[FilePartition].preferredLocations()
+    val useConsistentHash = this.sparkContext.conf.getBoolean("customsched.consistenthash", false)
+    if (useConsistentHash) {
+      val filePartition = split.asInstanceOf[FilePartition]
+      val filePath = filePartition.files(0).filePath
+      Seq(this.sparkContext.schedulerBackend.executorHashRing.locate(filePath).get().getKey)
+    } else {
+      split.asInstanceOf[FilePartition].preferredLocations()
+    }
   }
 }

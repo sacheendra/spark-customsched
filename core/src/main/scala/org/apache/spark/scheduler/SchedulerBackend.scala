@@ -17,8 +17,11 @@
 
 package org.apache.spark.scheduler
 
+import org.ishugaliy.allgood.consistent.hash.HashRing
+import org.ishugaliy.allgood.consistent.hash.node.SimpleNode
 import org.apache.spark.resource.ResourceProfile
 import org.apache.spark.storage.BlockManagerId
+import org.ishugaliy.allgood.consistent.hash.hasher.DefaultHasher
 
 /**
  * A backend interface for scheduling systems that allows plugging in different ones under
@@ -27,6 +30,11 @@ import org.apache.spark.storage.BlockManagerId
  */
 private[spark] trait SchedulerBackend {
   private val appId = "spark-application-" + System.currentTimeMillis
+
+  val executorHashRing: HashRing[SimpleNode] = HashRing
+    .newBuilder[SimpleNode]()
+    .hasher(DefaultHasher.MURMUR_3)
+    .build()
 
   def start(): Unit
   def stop(): Unit
