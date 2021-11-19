@@ -210,8 +210,9 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         removeWorker(workerId, host, message)
 
       case LaunchedExecutor(executorId) =>
+        val maxQueueLengthMultiplier = conf.getInt("customsched.maxqueuelengthmultiplier", 1)
         executorDataMap.get(executorId).foreach { data =>
-          data.freeCores = data.totalCores
+          data.freeCores = maxQueueLengthMultiplier * data.totalCores
         }
         makeOffers(executorId)
 
