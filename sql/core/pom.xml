@@ -35,6 +35,13 @@
   </properties>
 
   <dependencies>
+    <!-- https://mvnrepository.com/artifact/com.amazonaws/aws-java-sdk-s3 -->
+    <dependency>
+      <groupId>com.amazonaws</groupId>
+      <artifactId>aws-java-sdk-s3</artifactId>
+      <version>1.12.115</version>
+    </dependency>
+
     <dependency>
       <groupId>org.rocksdb</groupId>
       <artifactId>rocksdbjni</artifactId>

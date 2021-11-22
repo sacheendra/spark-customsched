@@ -23,6 +23,7 @@ import org.apache.spark._
 import org.apache.spark.rdd.RDD
 import org.apache.spark.shuffle.sort.SortShuffleManager
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.execution.datasources.PipelineSemaphores
 import org.apache.spark.sql.execution.metric.{SQLMetric, SQLShuffleReadMetricsReporter}
 import org.apache.spark.sql.internal.SQLConf
 
@@ -198,6 +199,18 @@ class ShuffledRowRDD(
     // `SQLShuffleReadMetricsReporter` will update its own metrics for SQL exchange operator,
     // as well as the `tempMetrics` for basic shuffle metrics.
     val sqlMetricsReporter = new SQLShuffleReadMetricsReporter(tempMetrics, metrics)
+
+    // acquire process lock
+    if (PipelineSemaphores.enableCustomSched) {
+      // Add logic to change between fast and slow compute later
+      var currentComputeSemaphore = PipelineSemaphores.computeSemaphore
+      currentComputeSemaphore.acquire()
+
+      context.addTaskCompletionListener[Unit](_ => {
+        currentComputeSemaphore.release()
+      })
+    }
+
     val reader = split.asInstanceOf[ShuffledRowRDDPartition].spec match {
       case CoalescedPartitionSpec(startReducerIndex, endReducerIndex, _) =>
         SparkEnv.get.shuffleManager.getReader(
@@ -237,6 +250,7 @@ class ShuffledRowRDD(
           context,
           sqlMetricsReporter)
     }
+
     reader.read().asInstanceOf[Iterator[Product2[Int, InternalRow]]].map(_._2)
   }
 

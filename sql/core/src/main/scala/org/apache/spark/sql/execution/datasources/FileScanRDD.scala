@@ -18,15 +18,23 @@
 package org.apache.spark.sql.execution.datasources
 
 import java.io.{FileNotFoundException, IOException}
+import java.net.URI
+import java.nio.ByteBuffer
+import java.util.UUID
+import java.util.concurrent.Semaphore
 
+import com.amazonaws.auth.DefaultAWSCredentialsProviderChain
+import com.amazonaws.services.s3.AmazonS3ClientBuilder
+import com.amazonaws.services.s3.model.GetObjectRequest
 import org.apache.parquet.io.ParquetDecodingException
 
-import org.apache.spark.{Partition => RDDPartition, SparkUpgradeException, TaskContext}
+import org.apache.spark.{Partition => RDDPartition, SparkEnv, SparkUpgradeException, TaskContext}
 import org.apache.spark.deploy.SparkHadoopUtil
 import org.apache.spark.rdd.{InputFileBlockHolder, RDD}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.errors.QueryExecutionErrors
+import org.apache.spark.sql.execution.datasources.pipeline.PipelineCache
 import org.apache.spark.sql.vectorized.ColumnarBatch
 import org.apache.spark.util.NextIterator
 
@@ -51,6 +59,20 @@ case class PartitionedFile(
   }
 }
 
+object PipelineSemaphores {
+  val env = SparkEnv.get
+  val conf = env.conf
+  val enableCustomSched = conf.getBoolean("customsched.enabled", false)
+  val maxReadParallelism = conf.getInt("customsched.maxreadparallelism", 8)
+  val maxFastComputeParallelism = conf.getInt("customsched.maxfastcomputeparallelism", 1)
+  val maxComputeParallelism = conf.getInt("customsched.maxcomputeparallelism", 7)
+  var readSemaphore = new Semaphore(maxReadParallelism)
+  var fastComputeSemaphore = new Semaphore(maxFastComputeParallelism)
+  var computeSemaphore = new Semaphore(maxComputeParallelism)
+
+  val cache = new PipelineCache()
+}
+
 /**
  * An RDD that scans a list of file partitions.
  */
@@ -64,6 +86,11 @@ class FileScanRDD(
   private val ignoreMissingFiles = sparkSession.sessionState.conf.ignoreMissingFiles
 
   override def compute(split: RDDPartition, context: TaskContext): Iterator[InternalRow] = {
+    val readSemaphore = PipelineSemaphores.readSemaphore
+    val fastComputeSemaphore = PipelineSemaphores.fastComputeSemaphore
+    val computeSemaphore = PipelineSemaphores.computeSemaphore
+    var currentComputeSemaphore = fastComputeSemaphore
+
     val iterator = new Iterator[Object] with AutoCloseable {
       private val inputMetrics = context.taskMetrics().inputMetrics
       private val existingBytesRead = inputMetrics.bytesRead
@@ -81,7 +108,49 @@ class FileScanRDD(
         inputMetrics.setBytesRead(existingBytesRead + getBytesReadCallback())
       }
 
-      private[this] val files = split.asInstanceOf[FilePartition].files.toIterator
+      private[this] var files = split.asInstanceOf[FilePartition].files.toIterator
+
+      if (PipelineSemaphores.enableCustomSched) {
+        val filesToCache = files
+        val tempBufSize = 8192
+        val tempBuf = new Array[Byte](tempBufSize)
+        val s3Client = AmazonS3ClientBuilder.standard()
+          .withPathStyleAccessEnabled(true)
+          .withCredentials(new DefaultAWSCredentialsProviderChain())
+          .build()
+
+        readSemaphore.acquire()
+        files = filesToCache.map(file => {
+          val uri = new URI(file.filePath)
+          val fullObject = s3Client.getObject(new GetObjectRequest(uri.getHost, uri.getPath))
+          val dataSize = fullObject.getObjectMetadata.getContentLength
+          val dataBuf = ByteBuffer.allocateDirect(dataSize.toInt)
+          val inputStream = fullObject.getObjectContent
+          var totalBytesRead = 0
+          var bytesRead = 0
+          while (bytesRead >= 0) {
+            bytesRead = inputStream.read(tempBuf)
+            dataBuf.put(tempBuf, totalBytesRead, bytesRead)
+            totalBytesRead += bytesRead
+          }
+          inputStream.close()
+
+          val uuid = "local$_" + UUID.randomUUID().toString
+          PipelineSemaphores.cache.put(uuid, dataBuf)
+          file.copy(filePath = uuid)
+        })
+        // fetch data and save in cache
+        readSemaphore.release()
+
+        // check if its a fast task or slow task
+        currentComputeSemaphore = computeSemaphore
+        currentComputeSemaphore.acquire()
+
+        context.addTaskCompletionListener[Unit](_ => {
+          currentComputeSemaphore.release()
+        })
+      }
+
       private[this] var currentFile: PartitionedFile = null
       private[this] var currentIterator: Iterator[Object] = null
 
@@ -90,9 +159,15 @@ class FileScanRDD(
         // InterruptibleIterator, but we inline it here instead of wrapping the iterator in order
         // to avoid performance overhead.
         context.killTaskIfInterrupted()
+        if (currentIterator != null && !currentIterator.hasNext) {
+          PipelineSemaphores.cache.delete(currentFile.filePath)
+        }
         (currentIterator != null && currentIterator.hasNext) || nextIterator()
       }
       def next(): Object = {
+        // check read speed and task duration
+        // mark task as long here
+
         val nextElement = currentIterator.next()
         // TODO: we should have a better separation of row based and batch based scan, so that we
         // don't need to run this `if` for every record.
@@ -192,7 +267,9 @@ class FileScanRDD(
     }
 
     // Register an on-task-completion callback to close the input stream.
-    context.addTaskCompletionListener[Unit](_ => iterator.close())
+    context.addTaskCompletionListener[Unit](_ => {
+      iterator.close()
+    })
 
     iterator.asInstanceOf[Iterator[InternalRow]] // This is an erasure hack.
   }
@@ -203,8 +280,14 @@ class FileScanRDD(
     val useConsistentHash = this.sparkContext.conf.getBoolean("customsched.consistenthash", false)
     if (useConsistentHash) {
       val filePartition = split.asInstanceOf[FilePartition]
-      val filePath = filePartition.files(0).filePath
-      Seq(this.sparkContext.schedulerBackend.executorHashRing.locate(filePath).get().getKey)
+      if (filePartition.files.length == 1) {
+        // For stages which read a single input file per partition
+        val filePath = filePartition.files(0).filePath
+        Seq(this.sparkContext.schedulerBackend.executorHashRing.locate(filePath).get().getKey)
+      } else {
+        // For stages which read multiple files; should not encounter them for now; crossed
+        split.asInstanceOf[FilePartition].preferredLocations()
+      }
     } else {
       split.asInstanceOf[FilePartition].preferredLocations()
     }
