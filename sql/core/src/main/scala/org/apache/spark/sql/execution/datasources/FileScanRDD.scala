@@ -277,8 +277,8 @@ class FileScanRDD(
   override protected def getPartitions: Array[RDDPartition] = filePartitions.toArray
 
   override protected def getPreferredLocations(split: RDDPartition): Seq[String] = {
-    val useConsistentHash = this.sparkContext.conf.getBoolean("customsched.consistenthash", false)
-    if (useConsistentHash) {
+    val enableCustomSched = this.sparkContext.conf.getBoolean("customsched.enabled", false)
+    if (enableCustomSched) {
       val filePartition = split.asInstanceOf[FilePartition]
       if (filePartition.files.length == 1) {
         // For stages which read a single input file per partition
