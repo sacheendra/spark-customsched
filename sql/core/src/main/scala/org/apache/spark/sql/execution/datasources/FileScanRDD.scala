@@ -19,11 +19,10 @@ package org.apache.spark.sql.execution.datasources
 
 import java.io.{FileNotFoundException, IOException}
 import java.net.URI
-import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.Semaphore
 
-import com.amazonaws.auth.DefaultAWSCredentialsProviderChain
+import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
 import com.amazonaws.services.s3.AmazonS3ClientBuilder
 import com.amazonaws.services.s3.model.GetObjectRequest
 import org.apache.parquet.io.ParquetDecodingException
@@ -71,6 +70,14 @@ object PipelineSemaphores {
   var computeSemaphore = new Semaphore(maxComputeParallelism)
 
   val cache = new PipelineCache()
+
+  val accessKey = conf.get("spark.hadoop.fs.s3a.access.key")
+  val secretKey = conf.get("spark.hadoop.fs.s3a.secret.key")
+  val awsCreds = new BasicAWSCredentials(accessKey, secretKey)
+  val s3Client = AmazonS3ClientBuilder.standard()
+    .withPathStyleAccessEnabled(true)
+    .withCredentials(new AWSStaticCredentialsProvider(awsCreds))
+    .build()
 }
 
 /**
@@ -111,20 +118,20 @@ class FileScanRDD(
       private[this] var files = split.asInstanceOf[FilePartition].files.toIterator
 
       if (PipelineSemaphores.enableCustomSched) {
+        logInfo("Custom sched enabled in filescanrdd")
         val filesToCache = files
         val tempBufSize = 8192
         val tempBuf = new Array[Byte](tempBufSize)
-        val s3Client = AmazonS3ClientBuilder.standard()
-          .withPathStyleAccessEnabled(true)
-          .withCredentials(new DefaultAWSCredentialsProviderChain())
-          .build()
+        val s3Client = PipelineSemaphores.s3Client
 
+        logInfo("Read sema acquired in filescanrdd")
         readSemaphore.acquire()
         files = filesToCache.map(file => {
           val uri = new URI(file.filePath)
           val fullObject = s3Client.getObject(new GetObjectRequest(uri.getHost, uri.getPath))
           val dataSize = fullObject.getObjectMetadata.getContentLength
-          val dataBuf = ByteBuffer.allocateDirect(dataSize.toInt)
+          val uuid = "local$_" + UUID.randomUUID().toString
+          val dataBuf = PipelineSemaphores.cache.put(uuid, dataSize.toInt)
           val inputStream = fullObject.getObjectContent
           var totalBytesRead = 0
           var bytesRead = 0
@@ -134,13 +141,13 @@ class FileScanRDD(
             totalBytesRead += bytesRead
           }
           inputStream.close()
+          dataBuf.position(0)
 
-          val uuid = "local$_" + UUID.randomUUID().toString
-          PipelineSemaphores.cache.put(uuid, dataBuf)
           file.copy(filePath = uuid)
         })
         // fetch data and save in cache
         readSemaphore.release()
+        logInfo("Read sema released in filescanrdd")
 
         // check if its a fast task or slow task
         currentComputeSemaphore = computeSemaphore

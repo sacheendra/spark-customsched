@@ -18,19 +18,59 @@
 package org.apache.spark.sql.execution.datasources.pipeline
 
 import java.nio.ByteBuffer
+import java.util.concurrent.locks.ReentrantLock
+
+import scala.util.control.Breaks.break
 
 import org.apache.parquet.io.{InputFile, SeekableInputStream}
 
+import org.apache.spark.SparkEnv
+
 class PipelineCache {
+
+  val env = SparkEnv.get
+  val conf = env.conf
+
+  val maxSize = conf.getLong("customsched.maxbuffersize", 8e9.toLong)
+  var currentSize = 0
+  val notifyLocks = scala.collection.mutable.Buffer[ReentrantLock]()
 
   val bufferMap = scala.collection.mutable.Map[String, ByteBuffer]()
 
-  def put(k: String, v: ByteBuffer): Unit = {
-    bufferMap.put(k, v)
+  def put(k: String, s: Int): ByteBuffer = {
+
+    val lock = new ReentrantLock()
+
+    while (true) {
+      this.synchronized {
+        if (currentSize + s <= maxSize) {
+          currentSize += s
+          break
+        } else {
+          lock.lock()
+          notifyLocks.append(lock)
+        }
+      }
+
+      // wait for data to be freed
+      lock.wait()
+    }
+    val buf = ByteBuffer.allocateDirect(s)
+    bufferMap.put(k, buf)
+    buf
   }
 
   def delete(k: String): Unit = {
-    bufferMap.remove(k)
+    val v = bufferMap.remove(k)
+    if (v.isDefined) {
+      this.synchronized {
+        currentSize -= v.get.capacity()
+        for (lock <- notifyLocks) {
+          lock.unlock()
+        }
+        notifyLocks.clear()
+      }
+    }
   }
 
   def get(k: String): Option[ByteBufferInputFile] = {
