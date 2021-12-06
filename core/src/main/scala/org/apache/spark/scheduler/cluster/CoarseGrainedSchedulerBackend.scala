@@ -210,10 +210,10 @@ class CoarseGrainedSchedulerBackend(scheduler: TaskSchedulerImpl, val rpcEnv: Rp
         removeWorker(workerId, host, message)
 
       case LaunchedExecutor(executorId) =>
-        val enableCustomSched = conf.getBoolean("customsched.enabled", false)
+        val enableCustomSched = conf.getBoolean("spark.customsched.enabled", false)
         var maxQueueLengthMultiplier = 1
         if (enableCustomSched) {
-          maxQueueLengthMultiplier = conf.getInt("customsched.maxqueuelengthmultiplier", 10)
+          maxQueueLengthMultiplier = conf.getInt("spark.customsched.maxqueuelengthmultiplier", 10)
         }
         executorDataMap.get(executorId).foreach { data =>
           data.freeCores = maxQueueLengthMultiplier * data.totalCores

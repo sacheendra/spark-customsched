@@ -26,6 +26,8 @@ import org.apache.parquet.format.converter.ParquetMetadataConverter;
 import org.apache.parquet.hadoop.ParquetFileReader;
 import org.apache.parquet.hadoop.metadata.ParquetMetadata;
 import org.apache.parquet.hadoop.util.HadoopInputFile;
+import org.apache.parquet.io.InputFile;
+import org.apache.spark.sql.execution.datasources.pipeline.PipelineInputFile;
 
 import java.io.IOException;
 
@@ -36,18 +38,18 @@ import java.io.IOException;
 public class ParquetFooterReader {
   public static ParquetMetadata readFooter(Configuration configuration,
       Path file, ParquetMetadataConverter.MetadataFilter filter) throws IOException {
-    return readFooter(HadoopInputFile.fromPath(file, configuration), filter);
+    return readFooter(PipelineInputFile.fromPath(file, configuration), configuration, filter);
   }
 
   public static ParquetMetadata readFooter(Configuration configuration,
       FileStatus fileStatus, ParquetMetadataConverter.MetadataFilter filter) throws IOException {
-    return readFooter(HadoopInputFile.fromStatus(fileStatus, configuration), filter);
+    return readFooter(HadoopInputFile.fromStatus(fileStatus, configuration), configuration, filter);
   }
 
-  private static ParquetMetadata readFooter(HadoopInputFile inputFile,
-      ParquetMetadataConverter.MetadataFilter filter) throws IOException {
+  private static ParquetMetadata readFooter(InputFile inputFile, Configuration configuration,
+                                            ParquetMetadataConverter.MetadataFilter filter) throws IOException {
     ParquetReadOptions readOptions =
-      HadoopReadOptions.builder(inputFile.getConfiguration()).withMetadataFilter(filter).build();
+      HadoopReadOptions.builder(configuration).withMetadataFilter(filter).build();
     // Use try-with-resources to ensure fd is closed.
     try (ParquetFileReader fileReader = ParquetFileReader.open(inputFile, readOptions)) {
       return fileReader.getFooter();

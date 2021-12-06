@@ -18,10 +18,11 @@
 package org.apache.spark.scheduler
 
 import org.ishugaliy.allgood.consistent.hash.HashRing
+import org.ishugaliy.allgood.consistent.hash.hasher.DefaultHasher
 import org.ishugaliy.allgood.consistent.hash.node.SimpleNode
+
 import org.apache.spark.resource.ResourceProfile
 import org.apache.spark.storage.BlockManagerId
-import org.ishugaliy.allgood.consistent.hash.hasher.DefaultHasher
 
 /**
  * A backend interface for scheduling systems that allows plugging in different ones under

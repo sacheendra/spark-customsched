@@ -33,6 +33,7 @@ import org.apache.parquet.io.InputFile;
 import org.apache.spark.sql.execution.datasources.PartitionedFile;
 import org.apache.spark.sql.execution.datasources.PipelineSemaphores;
 import org.apache.spark.sql.execution.datasources.pipeline.ByteBufferInputFile;
+import org.apache.spark.sql.execution.datasources.pipeline.PipelineInputFile;
 import scala.Option;
 
 import org.apache.hadoop.conf.Configuration;
@@ -93,16 +94,7 @@ public abstract class SpecificParquetRecordReaderBase<T> extends RecordReader<Vo
       .withRange(split.getStart(), split.getStart() + split.getLength())
       .build();
 
-    // Read an inputfile object from cache here
-    Option<ByteBufferInputFile> inputFileOption = PipelineSemaphores.cache().get(this.file.toString());
-    InputFile inputFile;
-    if (inputFileOption.isEmpty()) {
-      inputFile = HadoopInputFile.fromPath(file, configuration);
-    } else {
-      inputFile = inputFileOption.get();
-    }
-
-    this.reader = new ParquetFileReader(inputFile, options);
+    this.reader = new ParquetFileReader(PipelineInputFile.fromPath(file, configuration), options);
     this.fileSchema = reader.getFileMetaData().getSchema();
     Map<String, String> fileMetadata = reader.getFileMetaData().getKeyValueMetaData();
     ReadSupport<T> readSupport = getReadSupportInstance(getReadSupportClass(configuration));

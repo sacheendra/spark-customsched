@@ -23,12 +23,14 @@ import java.util.UUID
 import java.util.concurrent.Semaphore
 
 import com.amazonaws.auth.{AWSStaticCredentialsProvider, BasicAWSCredentials}
+import com.amazonaws.client.builder.AwsClientBuilder.EndpointConfiguration
 import com.amazonaws.services.s3.AmazonS3ClientBuilder
 import com.amazonaws.services.s3.model.GetObjectRequest
 import org.apache.parquet.io.ParquetDecodingException
 
 import org.apache.spark.{Partition => RDDPartition, SparkEnv, SparkUpgradeException, TaskContext}
 import org.apache.spark.deploy.SparkHadoopUtil
+import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.{InputFileBlockHolder, RDD}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.InternalRow
@@ -58,24 +60,30 @@ case class PartitionedFile(
   }
 }
 
-object PipelineSemaphores {
+object PipelineSemaphores extends Logging {
   val env = SparkEnv.get
   val conf = env.conf
-  val enableCustomSched = conf.getBoolean("customsched.enabled", false)
-  val maxReadParallelism = conf.getInt("customsched.maxreadparallelism", 8)
-  val maxFastComputeParallelism = conf.getInt("customsched.maxfastcomputeparallelism", 1)
-  val maxComputeParallelism = conf.getInt("customsched.maxcomputeparallelism", 7)
+  val enableCustomSched = conf.getBoolean("spark.customsched.enabled", false)
+  val maxReadParallelism = conf.getInt("spark.customsched.maxreadparallelism", 8)
+  val maxFastComputeParallelism = conf.getInt("spark.customsched.maxfastcomputeparallelism", 1)
+  val maxComputeParallelism = conf.getInt("spark.customsched.maxcomputeparallelism", 7)
   var readSemaphore = new Semaphore(maxReadParallelism)
   var fastComputeSemaphore = new Semaphore(maxFastComputeParallelism)
   var computeSemaphore = new Semaphore(maxComputeParallelism)
+  var maxBufferSize = conf.getLong("spark.customsched.maxbuffersize", 8e9.toLong)
 
-  val cache = new PipelineCache()
+  logWarning(s"WTF is wrong with this shit, $enableCustomSched")
 
+  val cache = new PipelineCache(maxBufferSize)
+
+  val endpoint = conf.get("spark.hadoop.fs.s3a.endpoint")
   val accessKey = conf.get("spark.hadoop.fs.s3a.access.key")
   val secretKey = conf.get("spark.hadoop.fs.s3a.secret.key")
+  val endpointConfig = new EndpointConfiguration(endpoint, "us-east-1")
   val awsCreds = new BasicAWSCredentials(accessKey, secretKey)
   val s3Client = AmazonS3ClientBuilder.standard()
     .withPathStyleAccessEnabled(true)
+    .withEndpointConfiguration(endpointConfig)
     .withCredentials(new AWSStaticCredentialsProvider(awsCreds))
     .build()
 }
@@ -117,6 +125,7 @@ class FileScanRDD(
 
       private[this] var files = split.asInstanceOf[FilePartition].files.toIterator
 
+      val testvar = PipelineSemaphores.enableCustomSched
       if (PipelineSemaphores.enableCustomSched) {
         logInfo("Custom sched enabled in filescanrdd")
         val filesToCache = files
@@ -137,8 +146,10 @@ class FileScanRDD(
           var bytesRead = 0
           while (bytesRead >= 0) {
             bytesRead = inputStream.read(tempBuf)
-            dataBuf.put(tempBuf, totalBytesRead, bytesRead)
-            totalBytesRead += bytesRead
+            if (bytesRead > 0) {
+              dataBuf.put(tempBuf, 0, bytesRead)
+              totalBytesRead += bytesRead
+            }
           }
           inputStream.close()
           dataBuf.position(0)
@@ -206,7 +217,7 @@ class FileScanRDD(
       private def nextIterator(): Boolean = {
         if (files.hasNext) {
           currentFile = files.next()
-          logInfo(s"Reading File $currentFile")
+          logInfo(s"Reading dumb File $currentFile")
           // Sets InputFileBlockHolder for the file block's information
           InputFileBlockHolder.set(currentFile.filePath, currentFile.start, currentFile.length)
 
@@ -284,7 +295,7 @@ class FileScanRDD(
   override protected def getPartitions: Array[RDDPartition] = filePartitions.toArray
 
   override protected def getPreferredLocations(split: RDDPartition): Seq[String] = {
-    val enableCustomSched = this.sparkContext.conf.getBoolean("customsched.enabled", false)
+    val enableCustomSched = this.sparkContext.conf.getBoolean("spark.customsched.enabled", false)
     if (enableCustomSched) {
       val filePartition = split.asInstanceOf[FilePartition]
       if (filePartition.files.length == 1) {
