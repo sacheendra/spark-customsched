@@ -57,6 +57,11 @@ class TaskMetrics private[spark] () extends Serializable {
   private val _peakExecutionMemory = new LongAccumulator
   private val _updatedBlockStatuses = new CollectionAccumulator[(BlockId, BlockStatus)]
 
+  private val _blocksRead = new LongAccumulator
+  private val _localBlocksRead = new LongAccumulator
+  private val _remoteBlocksRead = new LongAccumulator
+  private val _ufsBlocksRead = new LongAccumulator
+
   /**
    * Time taken on the executor to deserialize this task.
    */
@@ -125,6 +130,20 @@ class TaskMetrics private[spark] () extends Serializable {
     // `asScala` which accesses the internal values using `java.util.Iterator`.
     _updatedBlockStatuses.value.asScala.toSeq
   }
+
+  def blocksRead: Long = _blocksRead.sum
+  def localBlocksRead: Long = _localBlocksRead.sum
+  def remoteBlocksRead: Long = _remoteBlocksRead.sum
+  def ufsBlocksRead: Long = _ufsBlocksRead.sum
+
+  private[spark] def setBlocksRead(v: Long): Unit = _blocksRead.setValue(v)
+  private[spark] def setLocalBlocksRead(v: Long): Unit = _localBlocksRead.setValue(v)
+  private[spark] def setRemoteBlocksRead(v: Long): Unit = _remoteBlocksRead.setValue(v)
+  private[spark] def setUfsBlocksRead(v: Long): Unit = _ufsBlocksRead.setValue(v)
+  private[spark] def incBlocksRead(v: Long): Unit = _blocksRead.add(v)
+  private[spark] def incLocalBlocksRead(v: Long): Unit = _localBlocksRead.add(v)
+  private[spark] def incRemoteBlocksRead(v: Long): Unit = _remoteBlocksRead.add(v)
+  private[spark] def incUfsBlocksRead(v: Long): Unit = _ufsBlocksRead.add(v)
 
   // Setters and increment-ers
   private[spark] def setExecutorDeserializeTime(v: Long): Unit =
@@ -220,6 +239,12 @@ class TaskMetrics private[spark] () extends Serializable {
     DISK_BYTES_SPILLED -> _diskBytesSpilled,
     PEAK_EXECUTION_MEMORY -> _peakExecutionMemory,
     UPDATED_BLOCK_STATUSES -> _updatedBlockStatuses,
+
+    BLOCKS_READ -> _blocksRead,
+    LOCAL_BLOCKS_READ -> _localBlocksRead,
+    REMOTE_BLOCKS_READ -> _remoteBlocksRead,
+    UFS_BLOCKS_READ -> _ufsBlocksRead,
+
     shuffleRead.REMOTE_BLOCKS_FETCHED -> shuffleReadMetrics._remoteBlocksFetched,
     shuffleRead.LOCAL_BLOCKS_FETCHED -> shuffleReadMetrics._localBlocksFetched,
     shuffleRead.REMOTE_BYTES_READ -> shuffleReadMetrics._remoteBytesRead,

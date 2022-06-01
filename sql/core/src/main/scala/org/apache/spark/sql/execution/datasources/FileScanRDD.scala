@@ -19,6 +19,8 @@ package org.apache.spark.sql.execution.datasources
 
 import java.io.{Closeable, FileNotFoundException, IOException}
 
+import alluxio.client.block.BlockStoreCacheMetricsRecorder
+
 import org.apache.parquet.io.ParquetDecodingException
 
 import org.apache.spark.{Partition => RDDPartition, SparkUpgradeException, TaskContext}
@@ -65,7 +67,9 @@ class FileScanRDD(
 
   override def compute(split: RDDPartition, context: TaskContext): Iterator[InternalRow] = {
     val iterator = new Iterator[Object] with AutoCloseable {
-      private val inputMetrics = context.taskMetrics().inputMetrics
+      private var cacheMetricsInitialized = false
+      private val taskMetrics = context.taskMetrics()
+      private val inputMetrics = taskMetrics.inputMetrics
       private val existingBytesRead = inputMetrics.bytesRead
 
       // Find a function that will return the FileSystem bytes read by this thread. Do this before
@@ -133,6 +137,11 @@ class FileScanRDD(
 
       /** Advances to the next file. Returns true if a new non-empty iterator is available. */
       private def nextIterator(): Boolean = {
+        if (!cacheMetricsInitialized) {
+          cacheMetricsInitialized = true
+          BlockStoreCacheMetricsRecorder.reset()
+        }
+
         if (files.hasNext) {
           currentFile = files.next()
           logInfo(s"Reading File $currentFile")
@@ -202,6 +211,12 @@ class FileScanRDD(
               throw e
           }
         } else {
+          val cacheMetrics = BlockStoreCacheMetricsRecorder.get()
+          taskMetrics.setBlocksRead(cacheMetrics.blocksRead)
+          taskMetrics.setLocalBlocksRead(cacheMetrics.localBlocksRead)
+          taskMetrics.setRemoteBlocksRead(cacheMetrics.remoteBlocksRead)
+          taskMetrics.setUfsBlocksRead(cacheMetrics.ufsBlocksRead)
+
           currentFile = null
           InputFileBlockHolder.unset()
           false
