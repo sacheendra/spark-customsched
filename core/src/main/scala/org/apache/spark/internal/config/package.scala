@@ -659,6 +659,12 @@ package object config {
       .booleanConf
       .createWithDefault(false)
 
+  private[spark] val START_SHUFFLE_SERVER =
+    ConfigBuilder("spark.shuffle.server.start")
+      .version("1.2.0")
+      .booleanConf
+      .createWithDefault(false)
+
   private[spark] val SHUFFLE_SERVICE_FETCH_RDD_ENABLED =
     ConfigBuilder(Constants.SHUFFLE_SERVICE_FETCH_RDD_ENABLED)
       .doc("Whether to use the ExternalShuffleService for fetching disk persisted RDD blocks. " +

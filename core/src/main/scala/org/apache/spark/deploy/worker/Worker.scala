@@ -120,6 +120,8 @@ private[deploy] class Worker(
   private val CLEANUP_FILES_AFTER_EXECUTOR_EXIT =
     conf.get(config.STORAGE_CLEANUP_FILES_AFTER_EXECUTOR_EXIT)
 
+  private val START_SHUFFLE_SERVER = conf.get(config.START_SHUFFLE_SERVER)
+
   private var master: Option[RpcEndpointRef] = None
 
   /**
@@ -431,7 +433,9 @@ private[deploy] class Worker(
 
   private def startExternalShuffleService(): Unit = {
     try {
-      shuffleService.startIfEnabled()
+      if (START_SHUFFLE_SERVER) {
+        shuffleService.startIfEnabled()
+      }
     } catch {
       case e: Exception =>
         logError("Failed to start external shuffle service", e)
@@ -925,12 +929,12 @@ private[deploy] object Worker extends Logging {
     // bound, we may launch no more than one external shuffle service on each host.
     // When this happens, we should give explicit reason of failure instead of fail silently. For
     // more detail see SPARK-20989.
-    val externalShuffleServiceEnabled = conf.get(config.SHUFFLE_SERVICE_ENABLED)
-    val sparkWorkerInstances = scala.sys.env.getOrElse("SPARK_WORKER_INSTANCES", "1").toInt
-    require(externalShuffleServiceEnabled == false || sparkWorkerInstances <= 1,
-      "Starting multiple workers on one host is failed because we may launch no more than one " +
-        "external shuffle service on each host, please set spark.shuffle.service.enabled to " +
-        "false or set SPARK_WORKER_INSTANCES to 1 to resolve the conflict.")
+//    val externalShuffleServiceEnabled = conf.get(config.SHUFFLE_SERVICE_ENABLED)
+//    val sparkWorkerInstances = scala.sys.env.getOrElse("SPARK_WORKER_INSTANCES", "1").toInt
+//    require(externalShuffleServiceEnabled == false || sparkWorkerInstances <= 1,
+//      "Starting multiple workers on one host is failed because we may launch no more than one " +
+//        "external shuffle service on each host, please set spark.shuffle.service.enabled to " +
+//        "false or set SPARK_WORKER_INSTANCES to 1 to resolve the conflict.")
     rpcEnv.awaitTermination()
   }
 
